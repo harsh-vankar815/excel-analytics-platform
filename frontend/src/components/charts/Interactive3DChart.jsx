@@ -1,0 +1,1721 @@
+import { useEffect, useRef, useState, useMemo } from 'react';
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer';
+import html2canvas from 'html2canvas';
+import { saveAs } from 'file-saver';
+import { useTheme } from '../../contexts/ThemeContext';
+import { 
+  CubeIcon, 
+  ArrowsPointingOutIcon, 
+  ArrowsPointingInIcon,
+  CameraIcon,
+  DocumentIcon,
+  LockClosedIcon
+} from '@heroicons/react/24/outline';
+import { Link } from 'react-router-dom';
+
+const Interactive3DChart = ({ 
+  data,
+  selectedColumns,
+  chartType = 'column',
+  chartTitle = '',
+  config = {},
+  isDemoMode = false,
+  isAuthenticated = true
+}) => {
+  const containerRef = useRef(null);
+  const sceneRef = useRef(null);
+  const cameraRef = useRef(null);
+  const rendererRef = useRef(null);
+  const labelRendererRef = useRef(null);
+  const controlsRef = useRef(null);
+  const animationFrameRef = useRef(null);
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const [hasError, setHasError] = useState(false);
+  const [errorMessage, setErrorMessage] = useState('');
+  const { theme, getThemeStyles } = useTheme();
+  const styles = getThemeStyles();
+
+  const defaultConfig = useMemo(() => ({
+    maxHeight: 5,
+    barWidth: 0.5,
+    spacing: 0.2,
+    animate: false,
+    showGrid: true,
+    ...config
+  }), [config]);
+
+  // Function to create gradient texture
+  const createGradient = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 2;
+    canvas.height = 512;
+    const context = canvas.getContext('2d');
+    
+    const gradient = context.createLinearGradient(0, 0, 0, 512);
+    
+    if (theme === 'dark') {
+      gradient.addColorStop(0, '#0f172a'); // dark blue top
+      gradient.addColorStop(1, '#1e293b'); // slightly lighter dark blue bottom
+    } else {
+      gradient.addColorStop(0, '#e0f2fe'); // light blue top
+      gradient.addColorStop(1, '#f8fafc'); // almost white bottom
+    }
+    
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 2, 512);
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.needsUpdate = true;
+    
+    return texture;
+  };
+  
+  // Create grid texture with isDark parameter
+  const createGridTexture = (isDark = false) => {
+    const size = 512; // Reduced for better performance
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    
+    // Fill with background color
+    ctx.fillStyle = isDark ? '#1e293b80' : '#f8fafc80';
+    ctx.fillRect(0, 0, size, size);
+    
+    // Draw grid
+    ctx.strokeStyle = isDark ? '#475569' : '#cbd5e1';
+    ctx.lineWidth = 1;
+    
+    const gridDivisions = 20;
+    const step = size / gridDivisions;
+    
+    for (let i = 0; i <= gridDivisions; i++) {
+      // Vertical lines
+      ctx.beginPath();
+      ctx.moveTo(i * step, 0);
+      ctx.lineTo(i * step, size);
+      ctx.stroke();
+      
+      // Horizontal lines
+      ctx.beginPath();
+      ctx.moveTo(0, i * step);
+      ctx.lineTo(size, i * step);
+      ctx.stroke();
+    }
+    
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    texture.repeat.set(1, 1);
+    
+    return texture;
+  };
+
+  // Setup 3D scene function
+  const setupScene = () => {
+    // Reset error state on new data
+    setHasError(false);
+    setErrorMessage('');
+    
+    // Basic validation of input data
+    if (!containerRef.current) {
+      return;
+    }
+    
+    console.log('3D Chart data received:', { data, selectedColumns, chartType, chartTitle });
+    
+    // Handle different data formats
+    let processedData = [];
+    if (data) {
+      if (Array.isArray(data)) {
+        processedData = data;
+      } else if (data.source && Array.isArray(data.source)) {
+        processedData = data.source;
+      } else if (data.data && Array.isArray(data.data)) {
+        processedData = data.data;
+      } else if (typeof data === 'object') {
+        // Try to convert object to array
+        try {
+          processedData = Object.values(data);
+        } catch (e) {
+          console.error('Failed to convert data object to array', e);
+        }
+      }
+    }
+    
+    if (!processedData || processedData.length === 0) {
+      setIsLoading(false);
+      setHasError(true);
+      setErrorMessage('No data available for chart rendering');
+      return;
+    }
+    
+    // Extract column names from selectedColumns
+    const xColumn = selectedColumns.x || '';
+    const yColumns = Array.isArray(selectedColumns.y) ? selectedColumns.y : [selectedColumns.y || ''];
+    const zColumn = selectedColumns.z || '';
+    
+    console.log('Using columns for 3D chart:', { xColumn, yColumns, zColumn });
+    
+    if (!xColumn || yColumns.length === 0) {
+      setIsLoading(false);
+      setHasError(true);
+      setErrorMessage('Please select axes for chart rendering');
+      return;
+    }
+    
+    setIsLoading(true);
+
+    try {
+      // Setup scene with gradient background
+      const scene = new THREE.Scene();
+      
+      // Apply gradient background to scene
+      const texture = createGradient();
+      scene.background = texture;
+      
+      sceneRef.current = scene;
+  
+      // Setup camera with improved position
+      const camera = new THREE.PerspectiveCamera(
+        75,
+        containerRef.current.clientWidth / containerRef.current.clientHeight,
+        0.1,
+        1000
+      );
+      camera.position.set(6, 6, 6);
+      cameraRef.current = camera;
+  
+      // Setup renderer with optimizations
+      const renderer = new THREE.WebGLRenderer({ 
+        antialias: true,
+        alpha: true,
+        powerPreference: 'high-performance'
+      });
+      renderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
+      // Limit pixel ratio to improve performance, minimum of 1 or device ratio, but not higher than 2
+      renderer.setPixelRatio(Math.min(Math.max(window.devicePixelRatio, 1), 2)); 
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      
+      // Use color space settings for compatibility
+      try {
+        // In newer Three.js versions, use outputColorSpace
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.2;
+      } catch (e) {
+        console.warn('Advanced renderer options not supported:', e);
+      }
+      
+      // Try-catch for DOM operations
+      try {
+        containerRef.current.appendChild(renderer.domElement);
+        rendererRef.current = renderer;
+      } catch (error) {
+        console.error('Error appending renderer to container:', error);
+        setHasError(true);
+        setErrorMessage('Failed to initialize chart renderer');
+        setIsLoading(false);
+        return;
+      }
+  
+      // Setup label renderer
+      const labelRenderer = new CSS2DRenderer();
+      labelRenderer.setSize(containerRef.current.clientWidth, containerRef.current.clientHeight);
+      labelRenderer.domElement.style.position = 'absolute';
+      labelRenderer.domElement.style.top = '0';
+      labelRenderer.domElement.style.pointerEvents = 'none';
+      
+      try {
+        containerRef.current.appendChild(labelRenderer.domElement);
+        labelRendererRef.current = labelRenderer;
+      } catch (error) {
+        console.error('Error appending label renderer to container:', error);
+      }
+  
+      // Setup controls
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.1;
+      controls.rotateSpeed = 0.8;
+      controls.zoomSpeed = 1.2;
+      controls.minDistance = 3;
+      controls.maxDistance = 20;
+      controls.autoRotate = defaultConfig.animate;
+      controls.autoRotateSpeed = 1.0;
+      controlsRef.current = controls;
+  
+      // Enhanced lighting setup with optimizations
+      // Ambient light for base illumination
+      const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+      scene.add(ambientLight);
+      
+      // Main directional light with shadows
+      const directionalLight = new THREE.DirectionalLight(0xffffee, 1);
+      directionalLight.position.set(10, 10, 10);
+      directionalLight.castShadow = true;
+      
+      // Optimize shadow settings
+      directionalLight.shadow.mapSize.width = 1024; // Reduced for better performance
+      directionalLight.shadow.mapSize.height = 1024; // Reduced for better performance
+      directionalLight.shadow.camera.near = 0.5;
+      directionalLight.shadow.camera.far = 50;
+      directionalLight.shadow.bias = -0.0001;
+      
+      // Increase shadow camera size for better coverage
+      const d = 15;
+      directionalLight.shadow.camera.left = -d;
+      directionalLight.shadow.camera.right = d;
+      directionalLight.shadow.camera.top = d;
+      directionalLight.shadow.camera.bottom = -d;
+      scene.add(directionalLight);
+      
+      // Add fill light from opposite direction
+      const fillLight = new THREE.DirectionalLight(0xffffff, 0.3);
+      fillLight.position.set(-10, 5, -10);
+      scene.add(fillLight);
+      
+      // Add subtle hemisphere light for better color
+      const hemisphereLight = new THREE.HemisphereLight(
+        0xaaaaff, 
+        0x806040, 
+        0.4
+      );
+      scene.add(hemisphereLight);
+  
+      // Create floor plane with enhanced visuals
+      // Optimize floor texture resolution
+      const floorSize = 20;
+      const floorGeometry = new THREE.PlaneGeometry(floorSize, floorSize);
+      
+      const floorMaterial = new THREE.MeshPhongMaterial({ 
+        map: createGridTexture(),
+        transparent: true,
+        opacity: 0.6,
+        side: THREE.DoubleSide,
+        shininess: 0
+      });
+      
+      const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+      floor.rotation.x = -Math.PI / 2;
+      floor.position.y = -0.01; // Slightly below the origin
+      floor.receiveShadow = true;
+      floor.userData = { type: 'floor' };
+      scene.add(floor);
+  
+      // Try to create chart, with error handling
+      try {
+        createChart(processedData, chartType, selectedColumns);
+      } catch (error) {
+        console.error('Error creating chart:', error);
+        setHasError(true);
+        setErrorMessage('Failed to create chart: ' + error.message);
+      }
+  
+      // Add grid if enabled
+      if (defaultConfig.showGrid) {
+        const gridHelper = new THREE.GridHelper(10, 10, 0x888888, 0x444444);
+        scene.add(gridHelper);
+      }
+  
+      // Animation loop with optimizations
+      const animate = () => {
+        if (hasError) return;
+        
+        animationFrameRef.current = requestAnimationFrame(animate);
+        
+        if (controlsRef.current) {
+          controlsRef.current.update();
+        }
+        
+        if (rendererRef.current && sceneRef.current && cameraRef.current) {
+          rendererRef.current.render(sceneRef.current, cameraRef.current);
+        }
+        
+        if (labelRendererRef.current && sceneRef.current && cameraRef.current) {
+          labelRendererRef.current.render(sceneRef.current, cameraRef.current);
+        }
+      };
+      
+      animate();
+      
+      // Add a slight delay to ensure proper loading
+      setTimeout(() => {
+        setIsLoading(false);
+      }, 500);
+    } catch (error) {
+      console.error('Error initializing 3D chart:', error);
+      setHasError(true);
+      setErrorMessage('Failed to initialize 3D chart');
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    // Prevent chart rendering if user is not authenticated and not in demo mode
+    if (!isDemoMode && !isAuthenticated) {
+      return;
+    }
+    
+    // Set up scene
+    setupScene();
+    
+    return () => {
+      // Clean up
+      cleanupResources();
+    };
+  }, [data, selectedColumns, chartType, defaultConfig, theme, isDemoMode, isAuthenticated]);
+  
+  // Separate clean-up function for better code organization
+  const cleanupResources = () => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+      animationFrameRef.current = null;
+    }
+    
+    if (rendererRef.current) {
+      rendererRef.current.dispose();
+      rendererRef.current.forceContextLoss();
+      if (rendererRef.current.domElement && rendererRef.current.domElement.parentNode) {
+        rendererRef.current.domElement.parentNode.removeChild(rendererRef.current.domElement);
+      }
+      rendererRef.current = null;
+    }
+    
+    if (controlsRef.current) {
+      controlsRef.current.dispose();
+      controlsRef.current = null;
+    }
+    
+    if (labelRendererRef.current && labelRendererRef.current.domElement && labelRendererRef.current.domElement.parentNode) {
+      labelRendererRef.current.domElement.parentNode.removeChild(labelRendererRef.current.domElement);
+      labelRendererRef.current = null;
+    }
+    
+    if (sceneRef.current) {
+      // Properly dispose of all geometries and materials
+      sceneRef.current.traverse((object) => {
+        if (object.geometry) {
+          object.geometry.dispose();
+        }
+        
+        if (object.material) {
+          if (Array.isArray(object.material)) {
+            object.material.forEach(material => {
+              if (material.map) material.map.dispose();
+              material.dispose();
+            });
+          } else {
+            if (object.material.map) object.material.map.dispose();
+            object.material.dispose();
+          }
+        }
+      });
+      
+      sceneRef.current.clear();
+      sceneRef.current = null;
+    }
+    
+    cameraRef.current = null;
+  };
+
+  // Function to create a chart based on the data and columns
+  const createChart = (processedData, type, selectedColumns) => {
+    try {
+      // Clean up existing elements
+      if (sceneRef.current) {
+        sceneRef.current.traverse((object) => {
+          if (object.userData && object.userData.type === 'chartElement') {
+            if (object.geometry) object.geometry.dispose();
+            if (object.material) {
+              if (Array.isArray(object.material)) {
+                object.material.forEach(material => material.dispose());
+              } else {
+                object.material.dispose();
+              }
+            }
+            if (object.parent) {
+              object.parent.remove(object);
+            }
+          }
+        });
+    }
+
+    const scene = sceneRef.current;
+    
+      // Define createAxisLabel once here to avoid duplication and ensure availability
+      const createAxisLabel = (text, position, color = 0xffffff) => {
+        if (!text) return;
+        
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'bg-white/90 dark:bg-gray-800/90 px-2 py-1 rounded text-gray-900 dark:text-white text-sm font-medium shadow-md';
+        labelDiv.style.pointerEvents = 'none';
+        labelDiv.style.userSelect = 'none';
+        labelDiv.textContent = text;
+        
+        const label = new CSS2DObject(labelDiv);
+        label.position.copy(position);
+        scene.add(label);
+        
+        // Optional: Add a line from origin to the label
+        const lineMaterial = new THREE.LineBasicMaterial({ color: color });
+        const lineGeometry = new THREE.BufferGeometry().setFromPoints([
+          new THREE.Vector3(0, 0, 0),
+          new THREE.Vector3(position.x * 0.9, position.y * 0.9, position.z * 0.9)
+        ]);
+        
+        const line = new THREE.Line(lineGeometry, lineMaterial);
+        line.userData = { type: 'chartElement' };
+        scene.add(line);
+        
+        return label;
+      };
+      
+      // Get column data
+    const xColumn = selectedColumns.x || '';
+    const yColumns = Array.isArray(selectedColumns.y) ? selectedColumns.y : [selectedColumns.y || ''];
+    const zColumn = selectedColumns.z || '';
+    
+    console.log('Creating 3D chart with columns:', { xColumn, yColumns, zColumn });
+    
+    // Ensure data has these columns
+    if (!processedData.some(item => xColumn in item)) {
+      console.error(`X axis column ${xColumn} not found in data`, processedData[0]);
+      setHasError(true);
+      setErrorMessage(`X axis column "${xColumn}" not found in data`);
+      return;
+    }
+    
+    if (!yColumns.every(col => processedData.some(item => col in item))) {
+      console.error(`Some Y axis columns not found in data`, { yColumns, dataKeys: Object.keys(processedData[0] || {}) });
+      setHasError(true);
+      setErrorMessage(`Some Y axis columns not found in data`);
+      return;
+    }
+    
+    if (zColumn && !processedData.some(item => zColumn in item)) {
+      console.error(`Z axis column ${zColumn} not found in data`);
+      setHasError(true);
+      setErrorMessage(`Z axis column "${zColumn}" not found in data`);
+      return;
+    }
+    
+    // Get data values for selected axes
+    const xValues = processedData.map(item => item[xColumn]);
+    const yValues = yColumns.map(column => (
+      processedData.map(item => parseFloat(item[column]) || 0)
+    ));
+    
+    // If we have z-axis for 3D, use it
+    const zValues = zColumn ? processedData.map(item => parseFloat(item[zColumn]) || 0) : null;
+    
+    // Generate axis labels
+    const xAxisLabel = xColumn;
+    const yAxisLabel = yColumns.join(', ');
+    const zAxisLabel = zColumn || '';
+    
+    // Find min/max values for scaling
+    const allYValues = yValues.flat();
+    const minY = Math.min(...allYValues);
+    const maxY = Math.max(...allYValues);
+    
+    // Create appropriate chart based on type
+    if (type === 'column' || type === 'bar') {
+      // Column/Bar chart
+      const { maxHeight, barWidth, spacing } = defaultConfig;
+      const dataLength = xValues.length;
+      const seriesCount = yValues.length;
+      
+      // Calculate layout
+      const totalWidth = (barWidth + spacing) * dataLength * seriesCount;
+      const startX = -totalWidth / 2 + barWidth / 2;
+      
+      // Function to normalize height
+      const normalizeHeight = (value) => {
+        return ((value - minY) / (maxY - minY || 1)) * maxHeight || 0.1;
+      };
+      
+      // Get color palette
+      const colors = [
+        0x3B82F6, // Blue
+        0x10B981, // Green
+        0xF97316, // Orange
+        0x8B5CF6, // Purple
+        0xEC4899, // Pink
+        0x06B6D4, // Cyan
+      ];
+      
+      // Create columns/bars for each data point
+      yValues.forEach((series, seriesIndex) => {
+        series.forEach((value, index) => {
+          // Skip if the data has no value
+          if (value === undefined || value === null || isNaN(value)) return;
+          
+          const height = normalizeHeight(value);
+          const color = colors[seriesIndex % colors.length];
+          
+          let geometry;
+          let position = new THREE.Vector3();
+          
+          if (type === 'column') {
+            // For columns (vertical bars)
+            geometry = new THREE.BoxGeometry(barWidth, height, barWidth);
+            position.set(
+              startX + (barWidth + spacing) * (index + seriesIndex * dataLength),
+              height / 2,
+              0
+            );
+          } else {
+            // For bars (horizontal bars)
+            geometry = new THREE.BoxGeometry(height, barWidth, barWidth);
+            position.set(
+              height / 2,
+              startX + (barWidth + spacing) * (index + seriesIndex * dataLength),
+              0
+            );
+          }
+          
+          // Create material with slight transparency and phong for better lighting
+          const material = new THREE.MeshPhongMaterial({
+            color: color,
+            transparent: true,
+            opacity: 0.85,
+            specular: 0x111111,
+            shininess: 30
+          });
+          
+          const bar = new THREE.Mesh(geometry, material);
+          bar.position.copy(position);
+          bar.castShadow = true;
+          bar.receiveShadow = true;
+          
+          // Store metadata
+          bar.userData = {
+            type: 'chartElement',
+            dataPoint: {
+              x: xValues[index],
+              y: value,
+              series: yColumns[seriesIndex]
+            }
+          };
+          
+          // Add to scene
+          scene.add(bar);
+          
+          // Add value label above the bar
+          const labelDiv = document.createElement('div');
+          labelDiv.className = 'text-xs font-mono bg-gray-800 dark:bg-gray-900 text-white px-2 py-1 rounded-md';
+          labelDiv.textContent = value.toFixed(1);
+          
+          const label = new CSS2DObject(labelDiv);
+          
+          if (type === 'column') {
+            label.position.set(0, height + 0.3, 0);
+          } else {
+            label.position.set(height + 0.3, 0, 0);
+          }
+          
+          bar.add(label);
+        });
+      });
+      
+      // Add x-axis labels
+      xValues.forEach((label, index) => {
+        const xPos = startX + (barWidth + spacing) * (index + (seriesCount * dataLength) / 2 - dataLength / 2);
+        
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'text-xs font-medium bg-white/80 dark:bg-gray-800/80 text-gray-900 dark:text-white px-1 py-0.5 rounded shadow-sm';
+        labelDiv.textContent = String(label).substring(0, 10) + (String(label).length > 10 ? '...' : '');
+        
+        const labelObject = new CSS2DObject(labelDiv);
+        
+        if (type === 'column') {
+          labelObject.position.set(xPos, -0.5, 0);
+        } else {
+          labelObject.position.set(-0.5, xPos, 0);
+        }
+        
+        scene.add(labelObject);
+        labelObject.userData = { type: 'chartElement' };
+      });
+      
+      // Add axis labels
+      if (type === 'column') {
+        // X-axis label
+        createAxisLabel(xAxisLabel, new THREE.Vector3(0, -1.5, 0));
+        // Y-axis label
+        createAxisLabel(yAxisLabel, new THREE.Vector3(-totalWidth / 2 - 1, maxHeight / 2, 0));
+      } else {
+        // Y-axis label (horizontal position for bar chart)
+        createAxisLabel(xAxisLabel, new THREE.Vector3(-totalWidth / 2 - 1, 0, 0));
+        // X-axis label (vertical position for bar chart)
+        createAxisLabel(yAxisLabel, new THREE.Vector3(maxHeight / 2, -1.5, 0));
+      }
+      
+    } else if (type === 'scatter') {
+      // 3D Scatter plot
+      const maxRadius = defaultConfig.barWidth * 2;
+      
+      // Calculate ranges for scaling
+      const xValueNumbers = xValues.map(x => parseFloat(x) || 0);
+      const minX = Math.min(...xValueNumbers);
+      const maxX = Math.max(...xValueNumbers);
+      const rangeX = maxX - minX || 1;
+      
+      const minZ = zValues ? Math.min(...zValues) : 0;
+      const maxZ = zValues ? Math.max(...zValues) : 1;
+      const rangeZ = maxZ - minZ || 1;
+      
+      // Normalize to a reasonable scale
+      const normalize = (value, min, max, targetMin, targetMax) => {
+        return targetMin + (value - min) * (targetMax - targetMin) / (max - min || 1);
+      };
+      
+      // Get color palette
+      const colors = [
+        0x3B82F6, // Blue
+        0x10B981, // Green
+        0xF97316, // Orange
+        0x8B5CF6, // Purple
+        0xEC4899, // Pink
+        0x06B6D4, // Cyan
+      ];
+      
+      // Create points for each data series
+      yValues.forEach((series, seriesIndex) => {
+        const color = colors[seriesIndex % colors.length];
+        
+        series.forEach((value, index) => {
+          // Skip if any value is invalid
+          if (value === undefined || value === null || isNaN(value)) return;
+          
+          const xVal = parseFloat(xValues[index]) || 0;
+          const zVal = zValues ? zValues[index] : 0;
+          
+          // Scale values to a reasonable range
+          const x = normalize(xVal, minX, maxX, -5, 5);
+          const y = normalize(value, minY, maxY, 0, defaultConfig.maxHeight);
+          const z = normalize(zVal, minZ, maxZ, -5, 5);
+          
+          // Calculate point size based on z value or use default
+          const pointSize = zValues 
+            ? normalize(zVal, minZ, maxZ, maxRadius * 0.3, maxRadius)
+            : maxRadius * 0.5;
+          
+          // Create sphere for data point
+          const geometry = new THREE.SphereGeometry(pointSize, 16, 16);
+          const material = new THREE.MeshPhongMaterial({
+            color: color,
+            transparent: true,
+            opacity: 0.8,
+            specular: 0x222222,
+            shininess: 30
+          });
+          
+          const point = new THREE.Mesh(geometry, material);
+          point.position.set(x, y, z);
+          point.castShadow = true;
+          
+          // Store data for tooltips/interaction
+          point.userData = {
+            type: 'chartElement',
+            dataPoint: {
+              x: xValues[index],
+              y: value,
+              z: zValues ? zValues[index] : null,
+              series: yColumns[seriesIndex]
+            }
+          };
+          
+          scene.add(point);
+          
+          // Add label with data value
+          const labelDiv = document.createElement('div');
+          labelDiv.className = 'text-xs font-mono bg-gray-800 dark:bg-gray-900 text-white px-2 py-1 rounded-md opacity-80';
+          labelDiv.textContent = `(${xVal.toFixed(1)}, ${value.toFixed(1)}, ${zVal ? zVal.toFixed(1) : 'N/A'})`;
+          
+          const label = new CSS2DObject(labelDiv);
+          label.position.set(0, pointSize + 0.2, 0);
+          point.add(label);
+        });
+      });
+      
+      // Create helper axes for reference
+      const axisLength = 6;
+      const axisWidth = 0.05;
+      
+      // X Axis
+      const xAxisGeometry = new THREE.BoxGeometry(axisLength, axisWidth, axisWidth);
+      const xAxisMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000 });
+      const xAxis = new THREE.Mesh(xAxisGeometry, xAxisMaterial);
+      xAxis.position.set(0, -0.1, 0);
+      scene.add(xAxis);
+      xAxis.userData = { type: 'chartElement' };
+      
+      // Y Axis
+      const yAxisGeometry = new THREE.BoxGeometry(axisWidth, axisLength, axisWidth);
+      const yAxisMaterial = new THREE.MeshBasicMaterial({ color: 0x00ff00 });
+      const yAxis = new THREE.Mesh(yAxisGeometry, yAxisMaterial);
+      yAxis.position.set(-0.1, 0, 0);
+      scene.add(yAxis);
+      yAxis.userData = { type: 'chartElement' };
+      
+      // Z Axis
+      const zAxisGeometry = new THREE.BoxGeometry(axisWidth, axisWidth, axisLength);
+      const zAxisMaterial = new THREE.MeshBasicMaterial({ color: 0x0000ff });
+      const zAxis = new THREE.Mesh(zAxisGeometry, zAxisMaterial);
+      zAxis.position.set(0, -0.1, 0);
+      scene.add(zAxis);
+      zAxis.userData = { type: 'chartElement' };
+      
+      // Add axis labels
+      createAxisLabel(xAxisLabel, new THREE.Vector3(axisLength/2 + 0.5, -0.1, 0), 0xff0000);
+      createAxisLabel(yAxisLabel, new THREE.Vector3(-0.1, axisLength/2 + 0.5, 0), 0x00ff00);
+      createAxisLabel(zAxisLabel || 'Z', new THREE.Vector3(0, -0.1, axisLength/2 + 0.5), 0x0000ff);
+    } else if (type === 'surface') {
+      // 3D Surface plot
+      console.log('Creating 3D Surface plot');
+      
+      // Get min/max values for scaling
+      const xValueNumbers = xValues.map(x => parseFloat(x) || 0);
+      const minX = Math.min(...xValueNumbers);
+      const maxX = Math.max(...xValueNumbers);
+      
+      // We'll create a grid-like surface based on x and y values
+      // The height (z) will be determined by the first y-column values
+      const yData = yValues[0] || [];
+      if (!yData.length) {
+        setHasError(true);
+        setErrorMessage('No data available for Y-axis in surface chart');
+        return;
+      }
+      
+      // Create a grid of points
+      const gridSize = Math.ceil(Math.sqrt(yData.length));
+      const gridStep = 10 / gridSize; // Scale to fit in a 10x10 grid
+      
+      // Create a geometry for the surface
+      const geometry = new THREE.PlaneGeometry(10, 10, gridSize - 1, gridSize - 1);
+      
+      // Update vertex heights based on data
+      const vertices = geometry.attributes.position.array;
+      
+      // Calculate heights for each vertex
+      for (let i = 0; i < gridSize; i++) {
+        for (let j = 0; j < gridSize; j++) {
+          const index = i * gridSize + j;
+          if (index < yData.length) {
+            // Get the data value for this grid point
+            const value = yData[index];
+            // Normalize to a suitable height range
+            const height = ((value - minY) / (maxY - minY || 1)) * defaultConfig.maxHeight;
+            
+            // Update the vertex height (y coordinate) in the geometry
+            // Each vertex has 3 values (x,y,z) in the position array
+            const vertexIndex = (i * gridSize + j) * 3 + 1;
+            if (vertexIndex < vertices.length) {
+              vertices[vertexIndex] = height;
+            }
+          }
+        }
+      }
+      
+      // Update the geometry after modifying vertices
+      geometry.attributes.position.needsUpdate = true;
+      geometry.computeVertexNormals();
+      
+      // Create a material with color gradient based on height
+      const material = new THREE.MeshPhongMaterial({
+        side: THREE.DoubleSide,
+        vertexColors: true,
+        shininess: 70,
+        specular: 0x222222
+      });
+      
+      // Set colors based on height
+      const colors = [];
+      for (let i = 0; i < vertices.length / 3; i++) {
+        const height = vertices[i * 3 + 1];
+        const normalizedHeight = (height / defaultConfig.maxHeight) || 0;
+        
+        // Generate a color based on height - blue to red gradient
+        let color;
+        if (normalizedHeight < 0.25) {
+          color = new THREE.Color(0x0000FF).lerp(new THREE.Color(0x00FFFF), normalizedHeight * 4);
+        } else if (normalizedHeight < 0.5) {
+          color = new THREE.Color(0x00FFFF).lerp(new THREE.Color(0x00FF00), (normalizedHeight - 0.25) * 4);
+        } else if (normalizedHeight < 0.75) {
+          color = new THREE.Color(0x00FF00).lerp(new THREE.Color(0xFFFF00), (normalizedHeight - 0.5) * 4);
+        } else {
+          color = new THREE.Color(0xFFFF00).lerp(new THREE.Color(0xFF0000), (normalizedHeight - 0.75) * 4);
+        }
+        
+        colors.push(color.r, color.g, color.b);
+      }
+      
+      // Apply colors to the geometry
+      geometry.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+      
+      // Create and position the surface mesh
+      const surface = new THREE.Mesh(geometry, material);
+      surface.rotation.x = -Math.PI / 2; // Rotate to horizontal
+      surface.position.y = 0.1; // Just above the floor
+      scene.add(surface);
+      
+      // Store data for interaction
+      surface.userData = {
+        type: 'chartElement',
+        chartType: 'surface'
+      };
+      
+      // Add wireframe overlay for better visualization
+      const wireframe = new THREE.WireframeGeometry(geometry);
+      const lineMaterial = new THREE.LineBasicMaterial({
+        color: 0x000000,
+        transparent: true,
+        opacity: 0.2
+      });
+      const wireLines = new THREE.LineSegments(wireframe, lineMaterial);
+      surface.add(wireLines);
+      
+      // Add axis labels
+      const axisLength = 6;
+      createAxisLabel(xAxisLabel, new THREE.Vector3(axisLength/2 + 0.5, 0, 0), 0xff0000);
+      createAxisLabel(yAxisLabel, new THREE.Vector3(0, axisLength/2 + 0.5, 0), 0x00ff00);
+      createAxisLabel(zAxisLabel || 'Z', new THREE.Vector3(0, 0, axisLength/2 + 0.5), 0x0000ff);
+    } else if (type === 'bubble') {
+      // 3D Bubble chart
+      console.log('Creating 3D Bubble chart');
+      
+      // For bubble chart, we need x, y, z coordinates plus a size parameter
+      // X values come from x column, Y values from first y column, 
+      // Z values from z column (or second y column if present), 
+      // Bubble size from second/third column
+      
+      const xValueNumbers = xValues.map(x => parseFloat(x) || 0);
+      const minX = Math.min(...xValueNumbers);
+      const maxX = Math.max(...xValueNumbers);
+      
+      const yData = yValues[0] || [];
+      if (!yData.length) {
+        setHasError(true);
+        setErrorMessage('No data available for Y-axis in bubble chart');
+        return;
+      }
+      
+      // Determine Z values
+      let zData;
+      if (zValues) {
+        zData = zValues;
+      } else if (yValues.length > 1) {
+        zData = yValues[1];
+      } else {
+        // If no z values are available, use a default value
+        zData = new Array(yData.length).fill(0);
+      }
+      
+      // Determine bubble sizes - use the last y column if available, otherwise generate random sizes
+      let sizeData;
+      if (yValues.length > 2) {
+        sizeData = yValues[2];
+      } else if (yValues.length > 1 && !zValues) {
+        sizeData = yValues[1];
+      } else {
+        // Generate random sizes
+        sizeData = yData.map(() => Math.random() * 0.8 + 0.2); // Random sizes between 0.2 and 1.0
+      }
+      
+      // Find min/max for size normalization
+      const minSize = Math.min(...sizeData);
+      const maxSize = Math.max(...sizeData);
+      
+      // Get Z range for normalization
+      const minZ = Math.min(...zData);
+      const maxZ = Math.max(...zData);
+      
+      // Normalize function to scale values to a suitable range
+      const normalize = (value, min, max, targetMin, targetMax) => {
+        return targetMin + (value - min) * (targetMax - targetMin) / (max - min || 1);
+      };
+      
+      // Color palette
+      const colors = [
+        0x3B82F6, // Blue
+        0x10B981, // Green
+        0xF97316, // Orange
+        0x8B5CF6, // Purple
+        0xEC4899, // Pink
+        0x06B6D4, // Cyan
+      ];
+      
+      // Create bubbles for each data point
+      yData.forEach((value, index) => {
+        if (value === undefined || value === null || isNaN(value)) return;
+        
+        // Get coordinates
+        const xVal = xValueNumbers[index];
+        const yVal = value;
+        const zVal = zData[index];
+        
+        // Normalize to a reasonable scale
+        const x = normalize(xVal, minX, maxX, -5, 5);
+        const y = normalize(yVal, minY, maxY, 0, defaultConfig.maxHeight);
+        const z = normalize(zVal, minZ, maxZ, -5, 5);
+        
+        // Calculate bubble size
+        const sizeVal = sizeData[index];
+        const bubbleSize = normalize(sizeVal, minSize, maxSize, 0.2, 1.0);
+        
+        // Create sphere for the bubble
+        const geometry = new THREE.SphereGeometry(bubbleSize, 32, 32);
+        
+        // Use color based on size
+        const colorIndex = Math.floor(normalize(sizeVal, minSize, maxSize, 0, colors.length - 0.01));
+        const color = colors[colorIndex];
+        
+        // Create material with transparency for bubbles
+        const material = new THREE.MeshPhysicalMaterial({
+          color: color,
+          transparent: true,
+          opacity: 0.7,
+          metalness: 0.2,
+          roughness: 0.3,
+          clearcoat: 0.5
+        });
+        
+        const bubble = new THREE.Mesh(geometry, material);
+        bubble.position.set(x, y, z);
+        bubble.castShadow = true;
+        bubble.receiveShadow = true;
+        
+        // Store data for tooltips/interaction
+        bubble.userData = {
+          type: 'chartElement',
+          dataPoint: {
+            x: xValues[index],
+            y: yVal,
+            z: zVal,
+            size: sizeVal
+          }
+        };
+        
+        scene.add(bubble);
+        
+        // Add label with data
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'text-xs font-mono bg-gray-800 dark:bg-gray-900 text-white px-2 py-1 rounded-md opacity-80';
+        labelDiv.textContent = `(${xVal.toFixed(1)}, ${yVal.toFixed(1)}, ${zVal.toFixed(1)})`;
+        
+        const label = new CSS2DObject(labelDiv);
+        label.position.set(0, bubbleSize + 0.3, 0);
+        bubble.add(label);
+      });
+      
+      // Add axis helper
+      const axisLength = 6;
+      
+      // Add axis labels
+      createAxisLabel(xAxisLabel, new THREE.Vector3(axisLength/2 + 0.5, 0, 0), 0xff0000);
+      createAxisLabel(yAxisLabel, new THREE.Vector3(0, axisLength/2 + 0.5, 0), 0x00ff00);
+      createAxisLabel(zAxisLabel || 'Z', new THREE.Vector3(0, 0, axisLength/2 + 0.5), 0x0000ff);
+    } else if (type === 'line') {
+      // 3D Line chart
+      console.log('Creating 3D Line chart');
+      
+      // For line chart, we need x, y coordinates and optional z
+      // X values from x column, Y values from y columns, Z values optional (from z column)
+      
+      const xValueNumbers = xValues.map(x => parseFloat(x) || 0);
+      const minX = Math.min(...xValueNumbers);
+      const maxX = Math.max(...xValueNumbers);
+      
+      // If no z values provided, use a default value for 3D effect
+      const zData = zValues || new Array(xValues.length).fill(0);
+      const minZ = Math.min(...zData);
+      const maxZ = Math.max(...zData);
+      
+      // Normalize function
+      const normalize = (value, min, max, targetMin, targetMax) => {
+        return targetMin + (value - min) * (targetMax - targetMin) / (max - min || 1);
+      };
+      
+      // Color palette
+      const colors = [
+        0x3B82F6, // Blue
+        0x10B981, // Green
+        0xF97316, // Orange
+        0x8B5CF6, // Purple
+        0xEC4899, // Pink
+        0x06B6D4, // Cyan
+      ];
+      
+      // Create a line for each y column
+      yValues.forEach((series, seriesIndex) => {
+        if (!series.length) return;
+        
+        // Create points for the line
+        const points = [];
+        series.forEach((value, index) => {
+          if (value === undefined || value === null || isNaN(value)) return;
+          
+          // Get x, y, z coordinates
+          const xVal = xValueNumbers[index];
+          const yVal = value;
+          const zVal = zData[index];
+          
+          // Normalize to a reasonable scale
+          const x = normalize(xVal, minX, maxX, -5, 5);
+          const y = normalize(yVal, minY, maxY, 0, defaultConfig.maxHeight);
+          const z = normalize(zVal, minZ, maxZ, -5, 5);
+          
+          // Add point to the line
+          points.push(new THREE.Vector3(x, y, z));
+        });
+        
+        if (points.length < 2) {
+          console.error('Not enough valid points for line chart');
+          return;
+        }
+        
+        // Create line geometry
+        const geometry = new THREE.BufferGeometry().setFromPoints(points);
+        
+        // Use the series color
+        const color = colors[seriesIndex % colors.length];
+        
+        // Create material for the line
+        const material = new THREE.LineBasicMaterial({
+          color: color,
+          linewidth: 2 // Note: Line width may not work in WebGL
+        });
+        
+        // Create line object
+        const line = new THREE.Line(geometry, material);
+        scene.add(line);
+        
+        // Store data for interaction
+        line.userData = {
+          type: 'chartElement',
+          series: yColumns[seriesIndex]
+        };
+        
+        // Add points at each data point
+        const pointMaterial = new THREE.MeshPhongMaterial({
+          color: color,
+          shininess: 50
+        });
+        
+        points.forEach((point, pointIndex) => {
+          const pointGeometry = new THREE.SphereGeometry(0.15, 16, 16);
+          const pointMesh = new THREE.Mesh(pointGeometry, pointMaterial);
+          pointMesh.position.copy(point);
+          scene.add(pointMesh);
+          
+          // Store data for the point
+          pointMesh.userData = {
+            type: 'chartElement',
+            dataPoint: {
+              x: xValues[pointIndex],
+              y: series[pointIndex],
+              z: zData[pointIndex],
+              series: yColumns[seriesIndex]
+            }
+          };
+          
+          // Add label for data point
+          const labelDiv = document.createElement('div');
+          labelDiv.className = 'text-xs font-mono bg-gray-800 dark:bg-gray-900 text-white px-2 py-1 rounded-md opacity-80';
+          labelDiv.textContent = `${series[pointIndex].toFixed(1)}`;
+          
+          const label = new CSS2DObject(labelDiv);
+          label.position.set(0, 0.3, 0);
+          pointMesh.add(label);
+        });
+      });
+      
+      // Add axis helper
+      const axisLength = 6;
+      
+      // Add axis labels
+      createAxisLabel(xAxisLabel, new THREE.Vector3(axisLength/2 + 0.5, 0, 0), 0xff0000);
+      createAxisLabel(yAxisLabel, new THREE.Vector3(0, axisLength/2 + 0.5, 0), 0x00ff00);
+      createAxisLabel(zAxisLabel || 'Z', new THREE.Vector3(0, 0, axisLength/2 + 0.5), 0x0000ff);
+    } else if (type === 'heatmap') {
+      // 3D Heat Map
+      console.log('Creating 3D Heat Map');
+      
+      // For heatmap, we create a grid where the height and color represent intensity
+      
+      const xValueNumbers = xValues.map(x => parseFloat(x) || 0);
+      const yData = yValues[0] || [];
+      
+      if (!yData.length) {
+        setHasError(true);
+        setErrorMessage('No data available for Y-axis in heatmap');
+        return;
+      }
+      
+      // Create a grid of cubes
+      const gridSize = Math.ceil(Math.sqrt(yData.length));
+      const gridStep = 10 / gridSize;
+      
+      // Create heatmap cubes based on data intensity
+      yData.forEach((value, index) => {
+        // Position in the grid
+        const row = Math.floor(index / gridSize);
+        const col = index % gridSize;
+        
+        // Skip if value is not valid
+        if (value === undefined || value === null || isNaN(value)) return;
+        
+        // Normalize value between 0 and 1
+        const normalizedValue = (value - minY) / (maxY - minY || 1);
+        
+        // Height of the cube represents intensity
+        const height = normalizedValue * defaultConfig.maxHeight;
+        
+        // Create cube
+        const geometry = new THREE.BoxGeometry(gridStep - 0.1, height, gridStep - 0.1);
+        
+        // Color based on intensity (blue to red)
+        let color;
+        if (normalizedValue < 0.25) {
+          color = new THREE.Color(0x0000FF).lerp(new THREE.Color(0x00FFFF), normalizedValue * 4);
+        } else if (normalizedValue < 0.5) {
+          color = new THREE.Color(0x00FFFF).lerp(new THREE.Color(0x00FF00), (normalizedValue - 0.25) * 4);
+        } else if (normalizedValue < 0.75) {
+          color = new THREE.Color(0x00FF00).lerp(new THREE.Color(0xFFFF00), (normalizedValue - 0.5) * 4);
+        } else {
+          color = new THREE.Color(0xFFFF00).lerp(new THREE.Color(0xFF0000), (normalizedValue - 0.75) * 4);
+        }
+        
+        // Create material with the color
+        const material = new THREE.MeshPhongMaterial({
+          color: color.getHex(),
+          specular: 0x111111,
+          shininess: 30,
+          transparent: true,
+          opacity: 0.9
+        });
+        
+        // Create cube mesh
+        const cube = new THREE.Mesh(geometry, material);
+        
+        // Position in grid
+        const x = (col - gridSize / 2) * gridStep + gridStep / 2;
+        const z = (row - gridSize / 2) * gridStep + gridStep / 2;
+        cube.position.set(x, height / 2, z);
+        
+        // Store data for interaction
+        cube.userData = {
+          type: 'chartElement',
+          dataPoint: {
+            value: value,
+            intensity: normalizedValue
+          }
+        };
+        
+        scene.add(cube);
+        
+        // Add label for high intensity points
+        if (normalizedValue > 0.7) {
+          const labelDiv = document.createElement('div');
+          labelDiv.className = 'text-xs font-mono bg-gray-800 dark:bg-gray-900 text-white px-2 py-1 rounded-md opacity-80';
+          labelDiv.textContent = value.toFixed(1);
+          
+          const label = new CSS2DObject(labelDiv);
+          label.position.set(0, height + 0.3, 0);
+          cube.add(label);
+        }
+      });
+      
+      // Add a grid on the floor for reference
+      const gridHelper = new THREE.GridHelper(10, gridSize);
+      gridHelper.position.y = 0.01; // Just above the floor
+      scene.add(gridHelper);
+      gridHelper.userData = { type: 'chartElement' };
+      
+      // Add color legend
+      const legendWidth = 5;
+      const legendHeight = 0.5;
+      
+      // Create a gradient canvas for the legend
+      const canvas = document.createElement('canvas');
+      canvas.width = 256;
+      canvas.height = 1;
+      const context = canvas.getContext('2d');
+      
+      // Create the gradient
+      const gradient = context.createLinearGradient(0, 0, 256, 1);
+      gradient.addColorStop(0, 'blue');
+      gradient.addColorStop(0.25, 'cyan');
+      gradient.addColorStop(0.5, 'lime');
+      gradient.addColorStop(0.75, 'yellow');
+      gradient.addColorStop(1, 'red');
+      
+      context.fillStyle = gradient;
+      context.fillRect(0, 0, 256, 1);
+      
+      // Use the canvas as a texture
+      const texture = new THREE.CanvasTexture(canvas);
+      
+      // Create a plane for the legend
+      const legendGeometry = new THREE.PlaneGeometry(legendWidth, legendHeight);
+      const legendMaterial = new THREE.MeshBasicMaterial({ 
+        map: texture,
+        side: THREE.DoubleSide
+      });
+      
+      const legend = new THREE.Mesh(legendGeometry, legendMaterial);
+      legend.position.set(0, defaultConfig.maxHeight + 1, -5);
+      legend.rotation.x = -Math.PI / 4; // Tilt for better visibility
+      
+      scene.add(legend);
+      legend.userData = { type: 'chartElement' };
+      
+      // Add legend labels
+      const minLabel = document.createElement('div');
+      minLabel.className = 'text-xs font-mono text-white';
+      minLabel.textContent = minY.toFixed(1);
+      
+      const minLabelObj = new CSS2DObject(minLabel);
+      minLabelObj.position.set(-legendWidth/2 - 0.5, 0, 0);
+      legend.add(minLabelObj);
+      
+      const maxLabel = document.createElement('div');
+      maxLabel.className = 'text-xs font-mono text-white';
+      maxLabel.textContent = maxY.toFixed(1);
+      
+      const maxLabelObj = new CSS2DObject(maxLabel);
+      maxLabelObj.position.set(legendWidth/2 + 0.5, 0, 0);
+      legend.add(maxLabelObj);
+      
+    } else if (type === 'waterfall') {
+      // 3D Waterfall chart
+      console.log('Creating 3D Waterfall chart');
+      
+      // For waterfall, we need cumulative values
+      
+      const xValueNumbers = xValues.map(x => parseFloat(x) || 0);
+      const yData = yValues[0] || [];
+      
+      if (!yData.length) {
+        setHasError(true);
+        setErrorMessage('No data available for Y-axis in waterfall chart');
+        return;
+      }
+      
+      // Calculate cumulative values
+      let cumulativeValue = 0;
+      const cumulativeValues = [];
+      const individualValues = [];
+      
+      yData.forEach(value => {
+        if (value === undefined || value === null || isNaN(value)) {
+          individualValues.push(0);
+        } else {
+          individualValues.push(value);
+        }
+        
+        cumulativeValue += individualValues[individualValues.length - 1];
+        cumulativeValues.push(cumulativeValue);
+      });
+      
+      // Find min/max for the cumulative values for scaling
+      const minCumulative = Math.min(0, ...cumulativeValues);
+      const maxCumulative = Math.max(...cumulativeValues);
+      
+      // Width and depth of bars
+      const barWidth = defaultConfig.barWidth;
+      const barDepth = defaultConfig.barWidth;
+      const spacing = defaultConfig.spacing;
+      
+      // Starting position for first bar
+      const totalWidth = (barWidth + spacing) * individualValues.length;
+      const startX = -totalWidth / 2 + barWidth / 2;
+      
+      // Normalize height
+      const normalize = (value, min, max, targetMin, targetMax) => {
+        return targetMin + (value - min) * (targetMax - targetMin) / (max - min || 1);
+      };
+      
+      // Create bars for each value
+      individualValues.forEach((value, index) => {
+        // No bar for zero values
+        if (value === 0) return;
+        
+        // Get height and position based on cumulative value
+        const previousValue = index > 0 ? cumulativeValues[index - 1] : 0;
+        const currentValue = cumulativeValues[index];
+        
+        // Normalize heights
+        const yStart = normalize(previousValue, minCumulative, maxCumulative, 0, defaultConfig.maxHeight);
+        const yEnd = normalize(currentValue, minCumulative, maxCumulative, 0, defaultConfig.maxHeight);
+        
+        // Bar height (can be negative)
+        const height = yEnd - yStart;
+        const isPositive = height >= 0;
+        
+        // Create bar
+        const geometry = new THREE.BoxGeometry(barWidth, Math.abs(height), barDepth);
+        
+        // Color based on increase/decrease
+        const color = isPositive ? 0x22cc44 : 0xcc2222;
+        
+        // Create material
+        const material = new THREE.MeshPhongMaterial({
+          color: color,
+          transparent: true,
+          opacity: 0.8,
+          specular: 0x222222,
+          shininess: 30
+        });
+        
+        // Create mesh
+        const bar = new THREE.Mesh(geometry, material);
+        
+        // Position - account for positive/negative values
+        const yPos = isPositive ? yStart + height / 2 : yStart - Math.abs(height) / 2;
+        const xPos = startX + (barWidth + spacing) * index;
+        bar.position.set(xPos, yPos, 0);
+        
+        // Store data for interaction
+        bar.userData = {
+          type: 'chartElement',
+          dataPoint: {
+            x: xValues[index],
+            value: value,
+            cumulative: currentValue
+          }
+        };
+        
+        scene.add(bar);
+        
+        // Add connecting line to previous bar
+        if (index > 0) {
+          const points = [
+            new THREE.Vector3(startX + (barWidth + spacing) * (index - 1), yStart, 0),
+            new THREE.Vector3(xPos, yStart, 0)
+          ];
+          
+          const lineGeometry = new THREE.BufferGeometry().setFromPoints(points);
+          const lineMaterial = new THREE.LineBasicMaterial({ 
+            color: 0x666666,
+            linewidth: 2
+          });
+          
+          const line = new THREE.Line(lineGeometry, lineMaterial);
+          scene.add(line);
+          line.userData = { type: 'chartElement' };
+        }
+        
+        // Add value label
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'text-xs font-mono bg-gray-800 dark:bg-gray-900 text-white px-2 py-1 rounded-md opacity-80';
+        labelDiv.textContent = value.toFixed(1);
+        
+        const label = new CSS2DObject(labelDiv);
+        label.position.set(0, isPositive ? Math.abs(height) + 0.3 : -Math.abs(height) - 0.3, 0);
+        bar.add(label);
+      });
+      
+      // Add total label at the end
+      const totalLabelDiv = document.createElement('div');
+      totalLabelDiv.className = 'text-sm font-bold bg-gray-800 dark:bg-gray-900 text-white px-3 py-2 rounded-md';
+      totalLabelDiv.textContent = `Total: ${cumulativeValues[cumulativeValues.length - 1].toFixed(1)}`;
+      
+      const totalLabel = new CSS2DObject(totalLabelDiv);
+      const lastXPos = startX + (barWidth + spacing) * (individualValues.length - 1) + barWidth + spacing;
+      const lastYPos = normalize(cumulativeValues[cumulativeValues.length - 1], minCumulative, maxCumulative, 0, defaultConfig.maxHeight);
+      
+      totalLabel.position.set(lastXPos, lastYPos, 0);
+      scene.add(totalLabel);
+      totalLabel.userData = { type: 'chartElement' };
+      
+      // Add x-axis labels
+      xValues.forEach((label, index) => {
+        if (index % Math.ceil(xValues.length / 10) !== 0) return; // Show fewer labels if many
+        
+        const xPos = startX + (barWidth + spacing) * index;
+        
+        const labelDiv = document.createElement('div');
+        labelDiv.className = 'text-xs font-medium bg-white/80 dark:bg-gray-800/80 text-gray-900 dark:text-white px-1 py-0.5 rounded shadow-sm';
+        labelDiv.textContent = String(label).substring(0, 10) + (String(label).length > 10 ? '...' : '');
+        
+        const labelObject = new CSS2DObject(labelDiv);
+        labelObject.position.set(xPos, -0.5, 0);
+        
+        scene.add(labelObject);
+        labelObject.userData = { type: 'chartElement' };
+      });
+    }
+  } catch (error) {
+    console.error('Error in createChart:', error);
+    setHasError(true);
+    setErrorMessage('Failed to create chart: ' + error.message);
+  }
+};
+
+  // Handle window resize
+  useEffect(() => {
+    const handleResize = () => {
+      if (!containerRef.current || !cameraRef.current || !rendererRef.current || !labelRendererRef.current) return;
+      
+      const width = containerRef.current.clientWidth;
+      const height = containerRef.current.clientHeight;
+      
+      cameraRef.current.aspect = width / height;
+      cameraRef.current.updateProjectionMatrix();
+      
+      rendererRef.current.setSize(width, height);
+      labelRendererRef.current.setSize(width, height);
+    };
+    
+    window.addEventListener('resize', handleResize);
+    
+    return () => {
+      window.removeEventListener('resize', handleResize);
+    };
+  }, []);
+
+  // Toggle fullscreen mode
+  const toggleFullScreen = () => {
+    setIsFullScreen(!isFullScreen);
+    
+    // Wait for state update and DOM changes, then update rendering
+    setTimeout(() => {
+      if (containerRef.current && cameraRef.current && rendererRef.current && labelRendererRef.current) {
+        const width = containerRef.current.clientWidth;
+        const height = containerRef.current.clientHeight;
+        
+        cameraRef.current.aspect = width / height;
+        cameraRef.current.updateProjectionMatrix();
+        
+        rendererRef.current.setSize(width, height);
+        labelRendererRef.current.setSize(width, height);
+      }
+    }, 100);
+  };
+
+  // Download chart as image
+  const downloadChartAsImage = () => {
+    if (!containerRef.current) return;
+    
+    try {
+      // Force rendering one more frame before capturing
+      if (rendererRef.current && sceneRef.current && cameraRef.current) {
+        rendererRef.current.render(sceneRef.current, cameraRef.current);
+      }
+      
+      const options = {
+        useCORS: true,
+        allowTaint: true,
+        backgroundColor: '#ffffff',
+        scale: 2, // Higher quality
+        logging: false,
+        // Avoid using oklch color function which causes issues
+        onclone: (clonedDoc) => {
+          // Remove any styles with "oklch" to prevent parsing errors
+          const elements = clonedDoc.querySelectorAll('*');
+          elements.forEach(el => {
+            if (window.getComputedStyle(el).color.includes('oklch')) {
+              el.style.color = '#000000';
+            }
+            if (window.getComputedStyle(el).backgroundColor.includes('oklch')) {
+              el.style.backgroundColor = 'transparent';
+            }
+          });
+          return clonedDoc;
+        }
+      };
+      
+      html2canvas(containerRef.current, options).then(canvas => {
+        canvas.toBlob(blob => {
+          saveAs(blob, `${chartTitle || '3d-chart'}.png`);
+        });
+      }).catch(error => {
+        console.error('Error generating chart image:', error);
+        alert('Failed to download image. Please try again.');
+      });
+    } catch (error) {
+      console.error('Error in downloadChartAsImage:', error);
+      alert('Failed to download image: ' + (error.message || 'Unknown error'));
+    }
+  };
+
+  // Download chart data as CSV
+  const downloadChartAsCSV = () => {
+    if (!data) {
+      return;
+    }
+    
+    // Extract column names from selectedColumns
+    const xColumn = selectedColumns.x || '';
+    const yColumns = Array.isArray(selectedColumns.y) ? selectedColumns.y : [selectedColumns.y || ''];
+    const zColumn = selectedColumns.z || '';
+    
+    if (!xColumn || yColumns.length === 0) {
+      return;
+    }
+    
+    // Handle different data formats
+    let processedData = [];
+    if (data) {
+      if (Array.isArray(data)) {
+        processedData = data;
+      } else if (data.source && Array.isArray(data.source)) {
+        processedData = data.source;
+      } else if (data.data && Array.isArray(data.data)) {
+        processedData = data.data;
+      } else if (typeof data === 'object') {
+        try {
+          processedData = Object.values(data);
+        } catch (e) {
+          console.error('Failed to convert data object to array', e);
+          return;
+        }
+      }
+    }
+    
+    if (!processedData || processedData.length === 0) {
+      return;
+    }
+    
+    // Create header row
+    const headers = [xColumn, ...yColumns];
+    if (zColumn) {
+      headers.push(zColumn);
+    }
+    
+    // Create data rows
+    const rows = processedData.map(row => {
+      const rowData = [
+        row[xColumn],
+        ...yColumns.map(col => row[col])
+      ];
+      
+      if (zColumn) {
+        rowData.push(row[zColumn]);
+      }
+      
+      return rowData;
+    });
+    
+    // Combine header and rows
+    const csvContent = [
+      headers.join(','),
+      ...rows.map(row => row.join(','))
+    ].join('\n');
+    
+    // Create and download the file
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    saveAs(blob, `${chartTitle || '3d-chart-data'}.csv`);
+  };
+
+  // If not authenticated and not in demo mode, show login prompt
+  if (!isDemoMode && !isAuthenticated) {
+    return (
+      <div className="flex flex-col items-center justify-center h-full p-8 text-center">
+        <LockClosedIcon className="w-12 h-12 text-gray-400 mb-4" />
+        <h3 className="text-xl font-semibold mb-2">Authentication Required</h3>
+        <p className="mb-4 text-gray-500">Please sign in to view this chart.</p>
+        <Link
+          to="/login"
+          className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors"
+        >
+          Sign In
+        </Link>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`bg-white dark:bg-gray-800 rounded-lg shadow-md overflow-hidden ${isFullScreen ? 'fixed inset-0 z-50' : ''}`}>
+      <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
+        <h3 className="text-lg font-medium text-gray-800 dark:text-white">
+          {chartTitle || '3D Chart'}
+        </h3>
+        <div className="flex space-x-2">
+          {/* Download as Image */}
+          <button 
+            className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none"
+            onClick={downloadChartAsImage}
+            title="Download as image"
+            disabled={hasError}
+          >
+            <CameraIcon className="h-5 w-5 text-gray-600 dark:text-gray-400" />
+          </button>
+          
+          {/* Download data as CSV */}
+          <button 
+            className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none"
+            onClick={downloadChartAsCSV}
+            title="Download data as CSV"
+            disabled={hasError}
+          >
+            <DocumentIcon className="h-5 w-5 text-gray-600 dark:text-gray-400" />
+          </button>
+          
+          {/* Toggle Fullscreen */}
+          <button 
+            className="p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 focus:outline-none"
+            onClick={toggleFullScreen}
+            title={isFullScreen ? "Exit fullscreen" : "Enter fullscreen"}
+            disabled={hasError}
+          >
+            {isFullScreen ? (
+              <ArrowsPointingInIcon className="h-5 w-5 text-gray-600 dark:text-gray-400" />
+            ) : (
+              <ArrowsPointingOutIcon className="h-5 w-5 text-gray-600 dark:text-gray-400" />
+            )}
+          </button>
+        </div>
+      </div>
+      <div 
+        ref={containerRef} 
+        className={`relative ${isFullScreen ? 'h-screen' : 'h-full'} w-full`}
+        style={{ minHeight: isFullScreen ? '100vh' : '400px' }}
+      >
+        {isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-gray-800/50 z-10">
+            <div className="flex flex-col items-center">
+              <CubeIcon className="h-10 w-10 text-blue-500 animate-spin" />
+              <p className="mt-2 text-gray-600 dark:text-gray-300">Loading 3D chart...</p>
+            </div>
+          </div>
+        )}
+        
+        {hasError && !isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-white/50 dark:bg-gray-800/50 z-10">
+            <div className="flex flex-col items-center max-w-md text-center p-6">
+              <svg className="w-12 h-12 text-red-500 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path>
+              </svg>
+              <h4 className="text-lg font-medium text-gray-800 dark:text-white mb-2">
+                Chart Rendering Error
+              </h4>
+              <p className="text-gray-600 dark:text-gray-300">
+                {errorMessage || 'Unable to render the 3D chart. Please check your data and try again.'}
+              </p>
+              {window.WebGLRenderingContext ? (
+                <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">
+                  Try refreshing the page or reducing the data size.
+                </p>
+              ) : (
+                <p className="mt-4 text-sm text-red-500">
+                  Your browser does not support WebGL, which is required for 3D charts.
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+export default Interactive3DChart;
