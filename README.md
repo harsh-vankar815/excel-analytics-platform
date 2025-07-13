@@ -1,3 +1,19 @@
+There is not env configuration for Frontend
+
+.env configuration for Backend:
+PORT=
+MONGO_URI=
+JWT_SECRET=
+JWT_EXPIRE=30d
+NODE_ENV=
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+SESSION_SECRET=
+OPENAI_API_KEY=
+EMAIL_SERVICE=Gmail
+EMAIL_PASSWORD=
+EMAIL_USERNAME=
+
 # Excel Analytics Platform
 
 A comprehensive platform for Excel data analytics with a modern React frontend and Node.js backend.
