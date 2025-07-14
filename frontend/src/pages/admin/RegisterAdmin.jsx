@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useDispatch, useSelector } from 'react-redux';
 import { registerAdmin } from '../../redux/auth/authSlice';
@@ -8,19 +8,10 @@ import { useTheme } from '../../contexts/ThemeContext';
 const RegisterAdmin = () => {
   const dispatch = useDispatch();
   const navigate = useNavigate();
-  const { isLoading, user } = useSelector((state) => state.auth);
+  const { isLoading } = useSelector((state) => state.auth);
   const [showPassword, setShowPassword] = useState(false);
   const { theme, getThemeStyles } = useTheme();
   const styles = getThemeStyles();
-
-  // Check if user is logged in and is an admin
-  useEffect(() => {
-    if (!user) {
-      navigate('/login');
-    } else if (user.role !== 'admin') {
-      navigate('/dashboard');
-    }
-  }, [user, navigate]);
 
   const [formData, setFormData] = useState({
     name: '',
@@ -95,11 +86,6 @@ const RegisterAdmin = () => {
       <div className="mb-8">
         <h2 className="text-2xl font-bold" style={{ color: styles.textColor }}>Register New Admin</h2>
         <p className="text-gray-600 dark:text-gray-400">Create a new admin user account</p>
-        <div className="mt-2 p-3 bg-blue-50 dark:bg-blue-900/30 border-l-4 border-blue-500 dark:border-blue-400">
-          <p className="text-sm text-blue-700 dark:text-blue-300">
-            <strong>Important:</strong> Only existing admin users can create new admin accounts. You must be logged in as an admin to access this feature.
-          </p>
-        </div>
       </div>
 
       <div className="bg-white dark:bg-gray-800 rounded-lg shadow-md p-6 max-w-2xl">

@@ -109,11 +109,6 @@ const AdminRegister = () => {
           </div>
           <h2 className="text-3xl font-bold text-primary mb-2" style={{ color: styles.textColor }}>Admin Register</h2>
           <p style={{ color: styles.secondaryColor }}>Create a new admin account</p>
-          <div className="mt-3 p-3 bg-blue-50 dark:bg-blue-900/30 border-l-4 border-blue-500 dark:border-blue-400 text-left mx-auto max-w-sm rounded-r">
-            <p className="text-sm text-blue-700 dark:text-blue-300">
-              <strong>Important:</strong> Only existing admin users can create new admin accounts. You must be logged in as an admin to access this feature.
-            </p>
-          </div>
         </div>
 
         <div style={{ 

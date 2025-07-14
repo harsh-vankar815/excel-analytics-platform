@@ -54,14 +54,14 @@ exports.authorize = (...roles) => {
     if (!req.user) {
       return res.status(401).json({
         success: false,
-        message: 'Not authorized to access this route - authentication required'
+        message: 'Not authorized to access this route'
       });
     }
 
     if (!roles.includes(req.user.role)) {
       return res.status(403).json({
         success: false, 
-        message: `Access denied: User role '${req.user.role}' does not have permission to access this route. Required role(s): ${roles.join(', ')}`
+        message: `User role ${req.user.role} is not authorized to access this route`
       });
     }
     

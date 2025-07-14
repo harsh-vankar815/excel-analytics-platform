@@ -156,30 +156,8 @@ const adminLogin = async (userData) => {
 
 // Register admin
 const registerAdmin = async (userData) => {
-  // Ensure token is included in the request
-  const token = localStorage.getItem('token');
-  if (!token) {
-    throw new Error('Authentication required. Please login as an admin first.');
-  }
-  
-  addAuthToken(token);
-  
-  try {
-    const response = await axiosInstance.post('/auth/admin/register', userData);
-    return response.data;
-  } catch (error) {
-    if (error.response) {
-      // The request was made and the server responded with a status code
-      // that falls out of the range of 2xx
-      throw new Error(error.response.data.message || 'Admin registration failed');
-    } else if (error.request) {
-      // The request was made but no response was received
-      throw new Error('No response from server. Please check your connection.');
-    } else {
-      // Something happened in setting up the request that triggered an Error
-      throw new Error('Error setting up the request: ' + error.message);
-    }
-  }
+  const response = await axiosInstance.post('/auth/admin/register', userData);
+  return response.data;
 };
 
 // Add auth token to axios instance
