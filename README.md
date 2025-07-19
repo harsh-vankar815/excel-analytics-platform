@@ -1,4 +1,5 @@
-There is not env configuration for Frontend
+.env configuration for Frontend:
+VITE_API_URL=http://localhost:5000/api or whatever deployed backend url
 
 .env configuration for Backend:
 PORT=

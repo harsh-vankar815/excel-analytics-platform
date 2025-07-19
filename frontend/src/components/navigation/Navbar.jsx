@@ -99,9 +99,9 @@ const Navbar = ({ isAdmin = false }) => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
               </svg>
             </div>
-            <span style={{ 
-              color: styles.textColor, 
-              fontSize: isSmallScreen ? '1rem' : isMobile ? '1.125rem' : '1.25rem', 
+            <span style={{
+              color: styles.textColor,
+              fontSize: isSmallScreen ? '0.75rem' : isMobile ? '0.875rem' : '1.25rem',
               fontWeight: '700',
               display: isSmallScreen && isAdmin ? 'none' : 'inline'
             }}>
@@ -118,7 +118,7 @@ const Navbar = ({ isAdmin = false }) => {
               style={{
                 textDecoration: 'none',
                 color: styles.textColor,
-                fontSize: isMobile ? '0.875rem' : '1rem',
+                fontSize: isMobile ? '0.75rem' : '1rem',
                 fontWeight: '500',
                 padding: isMobile ? '0.375rem 0.5rem' : '0.5rem 0.75rem',
                 borderRadius: '0.375rem',
@@ -192,7 +192,7 @@ const Navbar = ({ isAdmin = false }) => {
                   name={user?.name} 
                   size={isMobile ? 'sm' : 'md'} 
                 />
-                {!isSmallScreen && <span style={{ color: styles.textColor, fontSize: isMobile ? '0.875rem' : '1rem' }}>{user?.name}</span>}
+                {!isSmallScreen && <span style={{ color: styles.textColor, fontSize: isMobile ? '0.75rem' : '1rem' }}>{user?.name}</span>}
               </button>
 
               {dropdownOpen && (
@@ -215,7 +215,7 @@ const Navbar = ({ isAdmin = false }) => {
                     style={{ 
                       display: 'block',
                       padding: isMobile ? '0.375rem 0.75rem' : '0.5rem 1rem',
-                      fontSize: isMobile ? '0.75rem' : '0.875rem',
+                      fontSize: isMobile ? '0.625rem' : '0.875rem',
                       color: styles.textColor,
                       textDecoration: 'none'
                     }}
@@ -234,7 +234,7 @@ const Navbar = ({ isAdmin = false }) => {
                       style={{ 
                         display: 'block',
                         padding: isMobile ? '0.375rem 0.75rem' : '0.5rem 1rem',
-                        fontSize: isMobile ? '0.75rem' : '0.875rem',
+                        fontSize: isMobile ? '0.625rem' : '0.875rem',
                         color: styles.textColor,
                         textDecoration: 'none'
                       }}
@@ -255,7 +255,7 @@ const Navbar = ({ isAdmin = false }) => {
                       width: '100%',
                       textAlign: 'left',
                       padding: isMobile ? '0.375rem 0.75rem' : '0.5rem 1rem',
-                      fontSize: isMobile ? '0.75rem' : '0.875rem',
+                      fontSize: isMobile ? '0.625rem' : '0.875rem',
                       color: styles.textColor,
                       backgroundColor: 'transparent',
                       border: 'none',
@@ -283,7 +283,7 @@ const Navbar = ({ isAdmin = false }) => {
                   padding: isMobile ? '0.375rem 0.75rem' : '0.5rem 1rem',
                   borderRadius: '0.375rem',
                   fontWeight: '500',
-                  fontSize: isMobile ? '0.75rem' : '0.875rem'
+                  fontSize: isMobile ? '0.625rem' : '0.875rem'
                 }}
                 onMouseOver={(e) => {
                   e.currentTarget.style.backgroundColor = theme === 'dark' ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.05)';
@@ -303,7 +303,7 @@ const Navbar = ({ isAdmin = false }) => {
                   padding: isMobile ? '0.375rem 0.75rem' : '0.5rem 1rem',
                   borderRadius: '0.375rem',
                   fontWeight: '500',
-                  fontSize: isMobile ? '0.75rem' : '0.875rem'
+                  fontSize: isMobile ? '0.625rem' : '0.875rem'
                 }}
                 onMouseOver={(e) => {
                   e.currentTarget.style.backgroundColor = '#2563eb';
