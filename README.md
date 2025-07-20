@@ -1,3 +1,5 @@
+DEPLOYED PROJECT ON VERCEL: https://excel-analytics-platform-frontend.vercel.app/
+
 .env configuration for Frontend:
 VITE_API_URL=http://localhost:5000/api or whatever deployed backend url
 
